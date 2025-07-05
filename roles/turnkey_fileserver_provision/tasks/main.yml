@@ -1,0 +1,95 @@
+---
+- name: Download, Install, and Create Turnkey Fileserver Template
+  block:
+    - name: List Turnkey Fileserver Template
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          pveam available | grep fileserver | awk '{print $2}'
+      args:
+        executable: /bin/bash
+      register: turnkey_template
+      changed_when: false
+
+    - name: Check if template already exists
+      ansible.builtin.stat:
+        path: /var/lib/vz/template/cache/{{ turnkey_template['stdout'] }}
+      register: turnkey_template_exists
+
+    - name: Install Turnkey Fileserver Template
+      ansible.builtin.command:
+        cmd: pveam download local "{{ turnkey_template['stdout'] }}"
+      changed_when: true
+      when: not turnkey_template_exists['stat']['exists']
+
+    - name: Check if container already exists
+      ansible.builtin.stat:
+        path: /etc/pve/lxc/{{ turnkey_lxc_config['vmid'] }}.conf
+      register: lxc_exists
+
+    - name: Create Turnkey Fileserver LXC
+      community.proxmox.proxmox:
+        vmid: "{{ turnkey_lxc_config['vmid'] }}"
+        node: "{{ turnkey_lxc_config['node'] }}"
+        description: "{{ turnkey_lxc_config['description'] | default(omit) }}"
+        api_host: "{{ turnkey_lxc_config['api_host'] }}"
+        api_user: "{{ turnkey_lxc_config['api_user'] }}"
+        api_password: "{{ turnkey_lxc_config['api_password'] }}"
+        password: "{{ turnkey_lxc_config['password'] }}"
+        hostname: "{{ turnkey_lxc_config['hostname'] }}"
+        ostemplate: "local:vztmpl/{{ turnkey_template['stdout'] }}"
+        disk_volume:
+          storage: local-lvm
+          size: 8
+        unprivileged: false
+        cores: 1
+        memory: 512
+        swap: 512
+        netif:
+          net0: "{{ turnkey_lxc_config['network_config'] }}"
+        features:
+          - nesting=1
+        tags:
+          - storage
+      when: not lxc_exists['stat']['exists']
+
+    - name: Create Mountpoint for Turnkey Fileserver
+      ansible.builtin.lineinfile:
+        path: /etc/pve/lxc/{{ turnkey_lxc_config['vmid'] }}.conf
+        insertafter: '^net0:.*$'
+        line: mp0:/tank/data,mp=/mnt/data
+
+    - name: Copy inithooks.conf to /tmp/inithooks.conf
+      ansible.builtin.copy:
+        src: files/inithooks.conf
+        dest: /tmp/inithooks.conf
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Start LXC
+      community.proxmox.proxmox:
+        vmid: "{{ turnkey_lxc_config['vmid'] }}"
+        api_user: "{{ turnkey_lxc_config['api_user'] }}"
+        api_password: "{{ turnkey_lxc_config['api_password'] }}"
+        api_host: "{{ turnkey_lxc_config['api_host'] }}"
+        state: started
+
+    - name: Push inithooks.conf to Turnkey Fileserver
+      ansible.builtin.command:
+        cmd: pct push {{ turnkey_lxc_config['vmid'] }} /tmp/inithooks.conf /etc/inithooks.conf
+      changed_when: true
+
+    - name: Grab IP Address of Turnkey Fileserver
+      ansible.builtin.command: lxc-info -n "{{ turnkey_lxc_config['vmid'] }}" -iH
+      register: turnkey_ip
+      until: turnkey_ip['stdout'] | length > 0
+      retries: 10
+      delay: 5
+      changed_when: false
+
+    - name: Add Turnkey Fileserver to in-memory inventory
+      ansible.builtin.add_host:
+        host: "{{ turnkey_ip['stdout'] }}"
+        group: turnkey
+...

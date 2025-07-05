@@ -1,0 +1,14 @@
+---
+- name: Update and Upgradee System
+  block:
+    - name: Run apt update
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Run apt dist upgrade
+      ansible.builtin.apt:
+        upgrade: dist
+
+    - name: Reboot System
+      ansible.builtin.reboot:
+...

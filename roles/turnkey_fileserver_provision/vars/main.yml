@@ -1,0 +1,13 @@
+---
+turnkey_lxc_config:
+  vmid: 100
+  node: proxmox
+  description: Turnkey Fileserver LXC created with Ansible Automations
+  api_user: root@pam
+  api_password: <API_PASSWORD>
+  api_host: <API_HOST>
+  hostname: turnkey-fileserver
+  password: <API_PASSWORD>
+  storage: local-lvm
+  network_config: "name=eth0,bridge=vmbr0,ip=dhcp,firewall=1"
+...

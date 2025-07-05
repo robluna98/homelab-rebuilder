@@ -1,0 +1,21 @@
+---
+enterprise_repos:
+  - /etc/apt/sources.list.d/pve-enterprise.list
+  - /etc/apt/sources.list.d/ceph.list
+
+no_subscription_repo: http://download.proxmox.com/debian/pve bookworm pve-no-subscription
+
+zfs_pool_config:
+  name: tank
+  compression: lz4
+  vdevs:
+    - type: mirror
+      disks:
+        - /dev/sda
+        - /dev/sdb
+
+zfs_dataset_config:
+  name: tank/data
+
+gmail_notification_setup: true
+...
