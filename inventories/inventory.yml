@@ -1,5 +1,6 @@
 ---
 proxmox:
   hosts:
-    <ip>:
+    proxmox-node:
+      ansible_host: <ip>
 ...

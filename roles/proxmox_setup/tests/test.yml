@@ -1,5 +1,6 @@
 ---
-- hosts: localhost
+- name: Proxmox Setup
+  hosts: localhost
   remote_user: root
   roles:
     - proxmox_setup

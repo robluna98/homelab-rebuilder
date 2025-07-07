@@ -4,7 +4,7 @@
   hosts: proxmox
   become: true
   roles:
-    # - proxmox_setup
+    - proxmox_setup
     - turnkey_fileserver_provision
 
 # Step 2: Run setup for the Turnkey Fileserver

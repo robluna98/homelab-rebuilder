@@ -10,4 +10,5 @@ turnkey_lxc_config:
   password: <API_PASSWORD>
   storage: local-lvm
   network_config: "name=eth0,bridge=vmbr0,ip=dhcp,firewall=1"
+  http_port: <HTTP_PORT>
 ...

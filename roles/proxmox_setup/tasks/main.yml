@@ -36,10 +36,15 @@
       register: proxmoxer_result
       changed_when: "'Requirement already satisfied' not in proxmoxer_result['stdout']"
 
-    - name: Update proxmox container templates
+    - name: Get timestamp of apl-info file
+      ansible.builtin.stat:
+        path: /var/lib/pve-manager/apl-info/download.proxmox.com
+      register: apl_info
+
+    - name: Update Proxmox container templates if file is older than 30 days
       ansible.builtin.command: pveam update
       changed_when: true
-      register: pveam_update
+      when: apl_info['stat']['exists'] and (apl_info['stat']['mtime'] < (ansible_date_time['epoch'] | int - 2592000))
 
 - name: Enable IOMMU
   block:
@@ -51,6 +56,7 @@
         backrefs: true
         state: present
       when: "'GenuineIntel' in ansible_processor"
+      register: intel_iommu
 
     - name: Enable IOMMU for AMD CPUs
       ansible.builtin.lineinfile:
@@ -60,13 +66,16 @@
         backrefs: true
         state: present
       when: "'GenuineIntel' not in ansible_processor"
+      register: amd_iommu
 
     - name: Update Grub
       ansible.builtin.command: update-grub
       changed_when: true
+      when: intel_iommu['changed'] or amd_iommu['changed']
 
     - name: Reboot System
       ansible.builtin.reboot:
+      when: intel_iommu['changed'] or amd_iommu['changed']
 
 - name: Create ZFS Pools and Datasets
   block:

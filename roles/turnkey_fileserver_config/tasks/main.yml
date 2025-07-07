@@ -1,5 +1,5 @@
 ---
-- name: Update and Upgradee System
+- name: Update and Upgrade System
   block:
     - name: Run apt update
       ansible.builtin.apt:
@@ -8,7 +8,124 @@
     - name: Run apt dist upgrade
       ansible.builtin.apt:
         upgrade: dist
+      register: upgrade_result
 
     - name: Reboot System
       ansible.builtin.reboot:
+      when: "'0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.' not in upgrade_result.stdout"
+
+    - name: Whitelist IP in fail2ban
+      ansible.builtin.lineinfile:
+        path: /etc/fail2ban/jail.local
+        regexp: '^ignoreip\s*='
+        line: "ignoreip = 127.0.0.1/8 ::1 {{ fail2ban_whitelist | join(' ') }}"
+      register: fail2ban_whitelist
+      when: fail2ban_whitelist is defined
+      notify: Restart fail2ban
+
+- name: Create a user on TurnKey Linux via Webmin API
+  block:
+    - name: Login to Webmin
+      ansible.builtin.uri:
+        url: "https://{{ webmin_host }}:{{ webmin_port }}/session_login.cgi"
+        method: POST
+        validate_certs: false
+        headers:
+          Content-Type: application/x-www-form-urlencoded
+          Cookie: "redirect=1; testing=1"
+          Origin: "https://{{ webmin_host }}:{{ webmin_port }}"
+          Referer: "https://{{ webmin_host }}:{{ webmin_port }}/session_login.cgi?logout=1"
+        body:
+          user: "{{ webmin_user }}"
+          pass: "{{ webmin_password }}"
+        body_format: form-urlencoded
+        status_code:
+          - 302
+        return_content: false
+      register: login_response
+
+    - name: Extract SID cookie
+      ansible.builtin.set_fact:
+        sid_cookie: "{{ login_response['set_cookie'] | regex_search('sid=([^;]+)', '\\1') | join }}"
+
+    - name: Check if user exists
+      ansible.builtin.stat:
+        path: /home/{{ user }}
+      register: user_exists
+
+    - name: Create User
+      ansible.builtin.user:
+        name: "{{ user }}"
+        uid: "{{ user_id }}"
+        group: users
+        home: /home/{{ user }}
+        shell: /bin/sh
+        create_home: true
+      when: not user_exists['stat']['exists']
+
+    - name: Check if mountpoint is owned by user_id:users
+      ansible.builtin.stat:
+        path: /mnt/data
+      register: mountpoint_ownership
+
+    - name: Change ownership of mountpoint
+      ansible.builtin.file:
+        path: /mnt/data
+        state: directory
+        owner: "{{ user }}"
+        group: users
+        mode: '0755'
+        recurse: true
+      when:
+        - not mountpoint_ownership['stat']['pw_name'] == user
+        - not mountpoint_ownership['stat']['gr_name'] == "users"
+        - not mountpoint_ownership['stat']['mode'] == "0755"
+
+- name: Delete Pre-Defined Samba Shares
+  block:
+    - name: Delete samba share blocks
+      ansible.builtin.replace:
+        path: /etc/samba/smb.conf
+        regexp: "^\\[{{ item }}\\]\\n(?:^[^\\[].*\\n?)*"
+        replace: ''
+        backup: true
+      loop: "{{ samba_shares }}"
+
+    - name: Add new Samba share
+      ansible.builtin.blockinfile:
+        path: /etc/samba/smb.conf
+        block: |
+          [{{ new_samba_share_name }}]
+          {% filter indent(width=4, first=true) %}
+          writeable = yes
+          path = /mnt/data/
+          {% endfilter %}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+
+- name: Convert users to Samba
+  ansible.builtin.uri:
+    url: "https://{{ webmin_host }}:{{ webmin_port }}/samba/make_epass.cgi"
+    method: POST
+    validate_certs: false
+    headers:
+      Content-Type: "text/plain;charset=UTF-8"
+      Cookie: "sid={{ sid_cookie }}; redirect=1; testing=1"
+      Origin: "https://{{ webmin_host }}:{{ webmin_port }}"
+      Referer: "https://{{ webmin_host }}:{{ webmin_port }}/samba/ask_epass.cgi?xnavigation=1"
+      X-Requested-With: "XMLHttpRequest"
+    body_format: form-urlencoded
+    body:
+      include_list: "{{ user }}"
+      who: 1
+      skip_list: -499
+      update: 1
+      add: 1
+      delete: 0
+      newmode: 2
+      newpass: "{{ webmin_password }}"
+    status_code: [200]
+    return_content: true
+  changed_when: "'Already the same' not in samba_users['content']"
+  register: samba_users
+  notify: Restart Samba
 ...

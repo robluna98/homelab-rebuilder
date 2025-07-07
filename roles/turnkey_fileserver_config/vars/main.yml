@@ -1,2 +1,13 @@
 ---
-# vars file for turnkey_fileserver_config
+webmin_user: root
+webmin_password: <PASSWORD>
+webmin_host: <WEBMIN_HOST>
+webmin_port: <WEBMIN_PORT>
+user: <USER>
+user_id: <USER_ID>
+samba_shares:
+  - <SAMBA_SHARES>
+new_samba_share_name: <NEW_SAMBA_SHARE_NAME>
+fail2ban_whitelist:
+  - <IP>
+...

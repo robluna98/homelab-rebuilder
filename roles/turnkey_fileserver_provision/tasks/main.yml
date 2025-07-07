@@ -59,14 +59,6 @@
         insertafter: '^net0:.*$'
         line: mp0:/tank/data,mp=/mnt/data
 
-    - name: Copy inithooks.conf to /tmp/inithooks.conf
-      ansible.builtin.copy:
-        src: files/inithooks.conf
-        dest: /tmp/inithooks.conf
-        mode: '0600'
-        owner: root
-        group: root
-
     - name: Start LXC
       community.proxmox.proxmox:
         vmid: "{{ turnkey_lxc_config['vmid'] }}"
@@ -75,10 +67,26 @@
         api_host: "{{ turnkey_lxc_config['api_host'] }}"
         state: started
 
+    - name: Check if /etc/inithooks.conf exists inside container
+      ansible.builtin.command:
+        cmd: pct exec {{ turnkey_lxc_config['vmid'] }} -- test -f /etc/inithooks.conf
+      register: inithooks_check
+      changed_when: false
+
+    - name: Copy inithooks.conf to /tmp/inithooks.conf
+      ansible.builtin.copy:
+        src: files/inithooks.conf
+        dest: /tmp/inithooks.conf
+        mode: '0600'
+        owner: root
+        group: root
+      when: inithooks_check['rc'] != 0
+
     - name: Push inithooks.conf to Turnkey Fileserver
       ansible.builtin.command:
         cmd: pct push {{ turnkey_lxc_config['vmid'] }} /tmp/inithooks.conf /etc/inithooks.conf
       changed_when: true
+      when: inithooks_check['rc'] != 0
 
     - name: Grab IP Address of Turnkey Fileserver
       ansible.builtin.command: lxc-info -n "{{ turnkey_lxc_config['vmid'] }}" -iH
@@ -88,8 +96,22 @@
       delay: 5
       changed_when: false
 
+    - name: Add Turnkey Fileserver comments
+      ansible.builtin.blockinfile:
+        path: "/etc/pve/lxc/{{ turnkey_lxc_config['vmid'] }}.conf"
+        insertafter: '^#Turnkey Fileserver LXC created with Ansible Automations'
+        block: |
+          #
+          #Turnkey Address: https://{{ turnkey_ip.stdout }}:{{ turnkey_lxc_config['http_port'] | default('12321') }}
+          #
+          #Turnkey Fileserver IP: {{ turnkey_ip.stdout }}
+        marker: "{mark} ANSIBLE MANAGED BLOCK"
+        state: present
+
     - name: Add Turnkey Fileserver to in-memory inventory
       ansible.builtin.add_host:
-        host: "{{ turnkey_ip['stdout'] }}"
+        name: "{{ turnkey_lxc_config['hostname'] }}"
         group: turnkey
+        ansible_host: "{{ turnkey_ip['stdout'] }}"
+      register: turnkey_host
 ...

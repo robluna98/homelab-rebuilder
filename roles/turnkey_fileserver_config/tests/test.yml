@@ -1,5 +1,6 @@
 ---
-- hosts: localhost
+- name: Turnkey Fileserver Config
+  hosts: localhost
   remote_user: root
   roles:
     - turnkey_fileserver_config
