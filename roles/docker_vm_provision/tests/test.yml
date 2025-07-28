@@ -1,0 +1,7 @@
+---
+- name: Docker VM Provision
+  hosts: localhost
+  remote_user: root
+  roles:
+    - docker_vm_provision
+...

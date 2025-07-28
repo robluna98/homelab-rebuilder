@@ -96,22 +96,22 @@
       delay: 5
       changed_when: false
 
-    - name: Add Turnkey Fileserver comments
-      ansible.builtin.blockinfile:
-        path: "/etc/pve/lxc/{{ turnkey_lxc_config['vmid'] }}.conf"
-        insertafter: '^#Turnkey Fileserver LXC created with Ansible Automations'
-        block: |
-          #
-          #Turnkey Address: https://{{ turnkey_ip.stdout }}:{{ turnkey_lxc_config['http_port'] | default('12321') }}
-          #
-          #Turnkey Fileserver IP: {{ turnkey_ip.stdout }}
-        marker: "{mark} ANSIBLE MANAGED BLOCK"
-        state: present
+    # TODO:: Add Turnkey comments to description using HTML
+    # - name: Add Turnkey Fileserver comments
+    #   ansible.builtin.blockinfile:
+    #     path: "/etc/pve/lxc/{{ turnkey_lxc_config['vmid'] }}.conf"
+    #     insertafter: '^#Turnkey Fileserver LXC created with Ansible Automations'
+    #     block: |
+    #       #
+    #       #Turnkey Address: https://{{ turnkey_ip.stdout }}:{{ turnkey_lxc_config['http_port'] | default('12321') }}
+    #       #
+    #       #Turnkey Fileserver IP: {{ turnkey_ip.stdout }}
+    #     marker: "{mark} ANSIBLE MANAGED BLOCK"
+    #     state: present
 
     - name: Add Turnkey Fileserver to in-memory inventory
       ansible.builtin.add_host:
         name: "{{ turnkey_lxc_config['hostname'] }}"
         group: turnkey
         ansible_host: "{{ turnkey_ip['stdout'] }}"
-      register: turnkey_host
 ...

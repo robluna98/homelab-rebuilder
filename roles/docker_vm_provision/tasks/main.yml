@@ -1,0 +1,226 @@
+---
+- name: Download, Install and Create Docker VM
+  block:
+    - name: Grab Proxmox Access ticket
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8006/api2/json/access/ticket"
+        method: POST
+        body:
+          username: "{{ docker_vm_config['api_user'] }}"
+          password: "{{ docker_vm_config['api_password'] }}"
+        body_format: form-urlencoded
+        validate_certs: false
+        follow_redirects: true
+      register: proxmox_ticket
+
+    - name: Set Proxmox Ticket and CSRFPreventionToken
+      ansible.builtin.set_fact:
+        proxmox_ticket: "{{ proxmox_ticket['json']['data']['ticket'] }}"
+        csrf_prevention_token: "{{ proxmox_ticket['json']['data']['CSRFPreventionToken'] }}"
+
+    - name: Query ISO Image URL
+      ansible.builtin.uri:
+        url: "{{ 'https://' ~ ansible_host ~ ':8006/api2/json/nodes/' ~ docker_vm_config['node'] ~ '/query-url-metadata' ~
+                '?node=' ~ docker_vm_config['node'] ~
+                '&url=' ~ docker_vm_config['iso_url'] }}"
+        method: GET
+        validate_certs: false
+        headers:
+          'CSRFPreventionToken': "{{ csrf_prevention_token }}"
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        body_format: form-urlencoded
+        follow_redirects: true
+      register: iso_facts
+
+    - name: Set ISO Facts
+      ansible.builtin.set_fact:
+        iso_filename: "{{ iso_facts['json']['data']['filename'] }}"
+
+    - name: Check if ISO already exists
+      ansible.builtin.stat:
+        path: /var/lib/vz/template/iso/{{ iso_filename }}
+      register: iso_exists
+
+    - name: Download ISO Image
+      ansible.builtin.uri:
+        url: "{{ 'https://' ~ ansible_host ~ ':8006/api2/json/nodes/' ~ docker_vm_config['node'] ~ '/storage/' ~ docker_vm_config['storage'] ~ '/download-url' ~
+                '?content=iso' ~
+                '&filename=' ~ docker_vm_config['iso_url'] ~
+                '&node=' ~ docker_vm_config['node'] ~
+                '&storage=' ~ docker_vm_config['storage'] ~
+                '&url=' ~ docker_vm_config['iso_url'] }}"
+        method: POST
+        validate_certs: false
+        headers:
+          'CSRFPreventionToken': "{{ csrf_prevention_token }}"
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        body_format: form-urlencoded
+        follow_redirects: true
+      register: iso_download
+      when: not iso_exists['stat']['exists']
+
+    - name: Set Task UPID
+      ansible.builtin.set_fact:
+        task_upid: "{{ iso_download['json']['data'] }}"
+      when: not iso_exists['stat']['exists']
+
+    - name: Wait for ISO Download to Complete
+      ansible.builtin.uri:
+        url: "{{ 'https://' ~ ansible_host ~ ':8006/api2/json/nodes/' ~ docker_vm_config['node'] ~ '/tasks/' ~ task_upid ~ '/status' }}"
+        method: GET
+        validate_certs: false
+        headers:
+          'CSRFPreventionToken': "{{ csrf_prevention_token }}"
+          Cookie: "PVEAuthCookie={{ proxmox_ticket }}"
+        body_format: form-urlencoded
+        follow_redirects: true
+      register: iso_download_status
+      until: iso_download_status['json']['data']['status'] == 'stopped' and iso_download_status['json']['data']['exitstatus'] == 'OK'
+      when: not iso_exists['stat']['exists']
+      retries: 360 # 1 hour
+      delay: 10
+
+    - name: Ensure the snippets directory exists
+      ansible.builtin.file:
+        path: /var/lib/vz/snippets
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Import cloud-init user data config
+      ansible.builtin.template:
+        src: templates/cloudinit_vendor_data.j2
+        dest: "/var/lib/vz/snippets/{{ docker_vm_config['vmid'] }}-vendor.yml"
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Create Docker VM
+      community.proxmox.proxmox_kvm:
+        vmid: "{{ docker_vm_config['templateid'] }}"
+        node: "{{ docker_vm_config['node'] }}"
+        description: "{{ docker_vm_config['html_block'] | default(omit) }}"
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        name: "{{ docker_vm_config['template_name'] }}"
+        cpu: x86-64-v2-AES
+        cores: 1
+        memory: 256
+        scsihw: virtio-scsi-pci
+        ide:
+          ide2: "local-lvm:cloudinit"
+        net:
+          net0: "{{ docker_vm_config['network_config'] }}"
+        serial:
+          serial0: socket
+        onboot: true
+        vga: serial0
+        ostype: l26
+        boot: order=scsi0;ide2
+        tablet: false
+        agent: true
+        ciuser: "{{ docker_vm_config['user'] }}"
+        cipassword: "{{ docker_vm_config['password'] }}"
+        ciupgrade: true
+        cicustom: "vendor=local:snippets/{{ docker_vm_config['vmid'] }}-vendor.yml"
+        ipconfig:
+          ipconfig0: ip=dhcp
+
+    - name: Import cloud-init disk
+      community.proxmox.proxmox_disk:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        vmid: "{{ docker_vm_config['templateid'] }}"
+        disk: scsi0
+        import_from: /var/lib/vz/template/iso/{{ iso_filename }}
+        storage: local-lvm
+        format: raw
+        state: present
+
+    - name: Pause for 5 seconds
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Convert VM to template
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        node: "{{ docker_vm_config['node'] }}"
+        vmid: "{{ docker_vm_config['templateid'] }}"
+        state: template
+
+    - name: Clone VM template to docker-media VM
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        node: "{{ docker_vm_config['node'] }}"
+        vmid: "{{ docker_vm_config['templateid'] }}"
+        name: "{{ docker_vm_config['hostname'] }}"
+        clone: "{{ docker_vm_config['templateid'] }}"
+        newid: "{{ docker_vm_config['vmid'] }}"
+
+    - name: Resize CPU and Memory
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        node: "{{ docker_vm_config['node'] }}"
+        vmid: "{{ docker_vm_config['vmid'] }}"
+        cores: "{{ docker_vm_config['cores'] }}"
+        memory: "{{ docker_vm_config['memory'] }}"
+        update: true
+
+    - name: Resize disk to desired size
+      community.proxmox.proxmox_disk:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        vmid: "{{ docker_vm_config['vmid'] }}"
+        disk: scsi0
+        size: "{{ docker_vm_config['disk_volume'] }}G"
+        state: resized
+
+    - name: Start Docker-Media VM
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ docker_vm_config['api_host'] }}"
+        api_user: "{{ docker_vm_config['api_user'] }}"
+        api_password: "{{ docker_vm_config['api_password'] }}"
+        node: "{{ docker_vm_config['node'] }}"
+        vmid: "{{ docker_vm_config['vmid'] }}"
+        state: started
+
+    - name: Grab Docker-Media IP
+      ansible.builtin.command: qm guest exec {{ docker_vm_config['vmid'] }} -- hostname -I
+      register: docker_media_ip
+      until: docker_media_ip['stdout'] | length > 0
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Extract Docker VM IP from stdout
+      ansible.builtin.set_fact:
+        docker_ip_clean: >-
+          {{
+            (docker_media_ip['stdout'] | from_json)['out-data']
+            .split()
+            | select('match', '^192\.')
+            | list
+            | first
+          }}
+
+    - name: Set IP in notes (TEMPORARY)
+      ansible.builtin.command:
+        cmd: qm set {{ docker_vm_config['vmid'] }} -description "{{ docker_ip_clean }}"
+      changed_when: false
+
+    - name: Add Docker VM to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ docker_vm_config['hostname'] }}"
+        group: docker
+        ansible_host: "{{ docker_ip_clean }}"
+...

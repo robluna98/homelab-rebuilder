@@ -1,0 +1,7 @@
+---
+- name: Docker VM Config
+  hosts: localhost
+  remote_user: root
+  roles:
+    - docker_vm_config
+...

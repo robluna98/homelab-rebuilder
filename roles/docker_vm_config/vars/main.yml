@@ -1,0 +1,22 @@
+---
+install_jellyfin: true
+install_homarr: true
+
+nas_username: <username>
+nas_password: <password>
+
+jellyfin_user: test
+jellyfin_password: test
+
+movie_library_config:
+  - name: Movies
+    path: /media/movies/regular
+  - name: Anime%20Movies
+    path: /media/movies/anime
+
+tv_show_library_config:
+  - name: Shows
+    path: /media/shows/regular
+  - name: Anime%20Shows
+    path: /media/shows/anime
+...

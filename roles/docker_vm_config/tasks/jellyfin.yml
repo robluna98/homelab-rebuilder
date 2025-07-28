@@ -1,0 +1,302 @@
+---
+- name: Setup Jellyfin directory and start Jellyfin
+  block:
+    - name: Create jellyfin directories
+      ansible.builtin.file:
+        path: ./docker/{{ item }}
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - jellyfin
+        - jellyfin/config
+        - jellyfin/cache
+
+    - name: Add Jellyfin docker-compose file
+      ansible.builtin.template:
+        src: jellyfin.j2
+        dest: ./docker/jellyfin/docker-compose.yml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Check if Jellyfin is already runnning
+      community.docker.docker_container_info:
+        name: jellyfin
+      register: jellyfin_info
+
+    - name: Docker compose up Jellyfin
+      ansible.builtin.command:
+        cmd: docker compose -f ./docker/jellyfin/docker-compose.yml up -d
+      changed_when: true
+      when: not jellyfin_info['exists']
+
+    - name: Wait for Jellyfin web interface to start up
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096"
+        method: GET
+        status_code:
+          - 200
+      register: jellyfin_web
+      until: jellyfin_web['status'] == 200
+      retries: 24
+      delay: 5
+
+    - name: Check if Jellyfin is already configured
+      ansible.builtin.uri:
+        url: http://{{ docker_ip }}:8096/Users/AuthenticateByName
+        method: POST
+        headers:
+          Content-Type: application/json; charset=utf-8
+          Authorization: "MediaBrowser Client=\"Jellyfin Web\", Device=\"my-ansible-automation\", DeviceId=\"ansible-id\", Version=\"0.0.0\""
+        body_format: json
+        body:
+          Username: "{{ jellyfin_user }}"
+          Pw: "{{ jellyfin_password }}"
+        status_code:
+          - 200
+          - 401
+      register: jellyfin_authenticate
+
+- name: Setup Jellyfin Configuration with API
+  when: not jellyfin_authenticate['status'] == 200
+  block:
+    - name: Startup Jellyfin Configuration
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Startup/Configuration"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          ServerName: "{{ docker_ip }}:8096"
+          UICulture: en-US
+          MetadataCountryCode: US
+          PreferredMetadataLanguage: en
+        status_code:
+          - 204
+
+    - name: Get Startup Page
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Startup/User"
+        method: GET
+        headers:
+          Content-Type: application/json
+        status_code:
+          - 200
+
+    - name: Set User and Password
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Startup/User"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          Name: "{{ jellyfin_user }}"
+          Password: "{{ jellyfin_password }}"
+        status_code:
+          - 204
+        follow_redirects: true
+
+    - name: Add Movie Libraries
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Library/VirtualFolders?name={{ item['name'] }}&collectionType=movies&refreshLibrary=true"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          "LibraryOptions": {
+            "Enabled": true,
+            "EnableArchieMediaFiles": false,
+            "EnablePhotos": true,
+            "EnableRealtimeMonitor": true,
+            "EnableLUFSScan": true,
+            "ExtractTrickplayImagesDuringLibraryScan": true,
+            "SaveTrickplayWithMedia": true,
+            "EnableTrickplayImageExtraction": true,
+            "ExtractChapterImagesDuringLibraryScan": false,
+            "EnableChapterImageExtraction": false,
+            "EnableInternetProviders": true,
+            "SaveLocalMetadata": true,
+            "EnableAutomaticSeriesGrouping": false,
+            "PreferredMetadataLanguage": "",
+            "MetadataCountryCode": "",
+            "SeasonZeroDisplayName": "Specials",
+            "AutomaticRefreshIntervalDays": 0,
+            "EnableEmbeddedTitles": false,
+            "EnableEmbeddedExtrasTitles": false,
+            "EnableEmbeddedEpisodeInfos": false,
+            "AllowEmbeddedSubtitles": "AllowAll",
+            "SkipSubtitlesIfEmbeddedSubtitlesPresent": false,
+            "SkipSubtitlesIfAudioTrackMatches": false,
+            "SaveSubtitlesWithMedia": true,
+            "SaveLyricsWithMedia": false,
+            "RequirePerfectSubtitleMatch": true,
+            "AutomaticallyAddToCollection": true,
+            "PreferNonstandardArtistsTag": false,
+            "UseCustomTagDelimiters": false,
+            "MetadataSavers": [],
+            "TypeOptions":
+              [
+                {
+                  "Type": "Movie",
+                  "MetadataFetchers": ["TheMovieDb", "The Open Movie Database"],
+                  "MetadataFetcherOrder": ["TheMovieDb", "The Open Movie Database"],
+                  "ImageFetchers": ["TheMovieDb", "The Open Movie Database", "Embedded Image Extractor", "Screen Grabber"],
+                  "ImageFetcherOrder": ["TheMovieDb", "The Open Movie Database", "Embedded Image Extractor", "Screen Grabber"]
+                }
+              ],
+            "LocalMetadataReaderOrder": ["Nfo"],
+            "SubtitleDownloadLanguages": [],
+            "CustomTagDelimiters": ["/", "|", ";", "\\"],
+            "DelimiterWhitelist": [],
+            "DisabledSubtitleFetchers": [],
+            "SubtitleFetcherOrder": [],
+            "DisabledLyricFetchers": [],
+            "LyricFetcherOrder": [],
+            "PathInfos": [{"Path":"{{ item['path'] }}"}]
+          }
+        status_code:
+          - 204
+      loop: "{{ movie_library_config }}"
+
+    - name: Add TV Show Libraries
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Library/VirtualFolders?name={{ item['name'] }}&collectionType=tvshows&refreshLibrary=true"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          "LibraryOptions": {
+            "Enabled": true,
+            "EnableArchieMediaFiles": false,
+            "EnablePhotos": true,
+            "EnableRealtimeMonitor": true,
+            "EnableLUFSScan": true,
+            "ExtractTrickplayImagesDuringLibraryScan": true,
+            "SaveTrickplayWithMedia": true,
+            "EnableTrickplayImageExtraction": true,
+            "ExtractChapterImagesDuringLibraryScan": false,
+            "EnableChapterImageExtraction": false,
+            "EnableInternetProviders": true,
+            "SaveLocalMetadata": true,
+            "EnableAutomaticSeriesGrouping": false,
+            "PreferredMetadataLanguage": "",
+            "MetadataCountryCode": "",
+            "SeasonZeroDisplayName": "Specials",
+            "AutomaticRefreshIntervalDays": 0,
+            "EnableEmbeddedTitles": false,
+            "EnableEmbeddedExtrasTitles": false,
+            "EnableEmbeddedEpisodeInfos": false,
+            "AllowEmbeddedSubtitles": "AllowAll",
+            "SkipSubtitlesIfEmbeddedSubtitlesPresent": false,
+            "SkipSubtitlesIfAudioTrackMatches": false,
+            "SaveSubtitlesWithMedia": true,
+            "SaveLyricsWithMedia": false,
+            "RequirePerfectSubtitleMatch": true,
+            "AutomaticallyAddToCollection": false,
+            "PreferNonstandardArtistsTag": false,
+            "UseCustomTagDelimiters": false,
+            "MetadataSavers": [],
+            "TypeOptions":
+              [
+                {
+                  "Type": "Series",
+                  "MetadataFetchers": ["TheMovieDb", "The Open Movie Database"],
+                  "MetadataFetcherOrder": ["TheMovieDb", "The Open Movie Database"],
+                  "ImageFetchers": ["TheMovieDb"],
+                  "ImageFetcherOrder": ["TheMovieDb"]
+                },
+                {
+                  "Type":"Season",
+                  "MetadataFetchers":["TheMovieDb"],
+                  "MetadataFetcherOrder":["TheMovieDb"],
+                  "ImageFetchers":["TheMovieDb"],
+                  "ImageFetcherOrder":["TheMovieDb"]
+                },
+                {
+                  "Type":"Episode",
+                  "MetadataFetchers": ["TheMovieDb", "The Open Movie Database"],
+                  "MetadataFetcherOrder": ["TheMovieDb", "The Open Movie Database"],
+                  "ImageFetchers": ["TheMovieDb", "The Open Movie Database", "Embedded Image Extractor", "Screen Grabber"],
+                  "ImageFetcherOrder": ["TheMovieDb", "The Open Movie Database", "Embedded Image Extractor", "Screen Grabber"]
+                }
+              ],
+            "LocalMetadataReaderOrder": ["Nfo"],
+            "SubtitleDownloadLanguages": [],
+            "CustomTagDelimiters": ["/", "|", ";", "\\"],
+            "DelimiterWhitelist": [],
+            "DisabledSubtitleFetchers": [],
+            "SubtitleFetcherOrder": [],
+            "DisabledLyricFetchers": [],
+            "LyricFetcherOrder": [],
+            "PathInfos": [{"Path":"{{ item['path'] }}"}]
+          }
+        status_code:
+          - 204
+      loop: "{{ tv_show_library_config }}"
+
+    - name: Set Remote access
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Startup/RemoteAccess"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          EnableRemoteAccess: true
+        status_code:
+          - 204
+
+    - name: Startup wizard complete
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:8096/Startup/Complete"
+        method: POST
+        headers:
+          Content-Type: application/json
+        status_code:
+          - 204
+
+- name: Create API Key
+  ansible.builtin.uri:
+    url: "http://{{ docker_ip }}:8096/Users/AuthenticateByName"
+    method: POST
+    headers:
+      Content-Type: application/json; charset=utf-8
+      Authorization: "MediaBrowser Client=\"Jellyfin Web\", Device=\"my-ansible-automation\", DeviceId=\"ansible-id\", Version=\"0.0.0\""
+    body_format: json
+    body:
+      Username: "{{ jellyfin_user }}"
+      Pw: "{{ jellyfin_password }}"
+    status_code:
+      - 200
+  register: jellyfin_api
+
+- name: Create API Key test
+  ansible.builtin.uri:
+    url: "http://{{ docker_ip }}:8096/Auth/Keys?App=ansible_api"
+    method: POST
+    headers:
+      Authorization: "MediaBrowser Client={{ jellyfin_api['json']['SessionInfo']['Client'] }}, Token=\"{{ jellyfin_api['json']['AccessToken'] }}\""
+    status_code:
+      - 204
+  register: jellyfin_api_test
+
+- name: Grab API Key
+  ansible.builtin.uri:
+    url: "http://{{ docker_ip }}:8096/Auth/Keys?App=ansible_api"
+    method: GET
+    headers:
+      Authorization: "MediaBrowser Client={{ jellyfin_api['json']['SessionInfo']['Client'] }}, Token=\"{{ jellyfin_api['json']['AccessToken'] }}\""
+    status_code:
+      - 200
+  register: jellyfin_api_key
+
+- name: Debug API Key
+  ansible.builtin.debug:
+    msg: "{{ jellyfin_api_key['json']['Items'][0]['AccessToken'] }}"
+...

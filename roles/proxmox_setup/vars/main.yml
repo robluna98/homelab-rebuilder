@@ -18,4 +18,5 @@ zfs_dataset_config:
   name: tank/data
 
 gmail_notification_setup: true
+subscription_nag_remove: true
 ...

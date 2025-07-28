@@ -1,16 +1,21 @@
 ---
-# Step 1: Provision and configure Proxmox and Containers
 - name: Provision Infrastructure
   hosts: proxmox
   become: true
   roles:
     - proxmox_setup
     - turnkey_fileserver_provision
+    - docker_vm_provision
 
-# Step 2: Run setup for the Turnkey Fileserver
 - name: Setup Turnkey Fileserver
   hosts: turnkey
   become: true
   roles:
     - turnkey_fileserver_config
+
+- name: Setup Docker VM
+  hosts: docker
+  become: true
+  roles:
+    - docker_vm_config
 ...

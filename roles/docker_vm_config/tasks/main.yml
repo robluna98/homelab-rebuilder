@@ -1,0 +1,106 @@
+---
+- name: Assign IP address
+  ansible.builtin.set_fact:
+    docker_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+
+- name: Update and Upgrade System
+  block:
+    - name: Run apt update
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Run apt dist upgrade
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_result
+
+    - name: Reboot System
+      ansible.builtin.reboot:
+      when: "'0 upgraded, 0 newly installed, 0 to remove' not in upgrade_result['stdout']"
+
+- name: Setup Samba Directory
+  block:
+    - name: Create samba directory
+      ansible.builtin.file:
+        path: /home/{{ ansible_user }}/samba
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Install cifs-utils
+      ansible.builtin.apt:
+        name: cifs-utils
+        state: present
+
+    - name: Add Samba credentials
+      ansible.builtin.template:
+        src: samba_credentials.j2
+        dest: /etc/samba_credentials
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Mount samba directory
+      ansible.posix.mount:
+        path: /home/{{ ansible_user }}/samba
+        src: "//<IP>/<NEW_SAMBA_SHARE_NAME>"
+        fstype: cifs
+        opts: "credentials=/etc/samba_credentials,vers=3.0"
+        dump: 0
+        passno: 0
+        state: mounted
+
+- name: Setup Base Docker Packages and User
+  block:
+    - name: Download Docker GPG Key
+      ansible.builtin.command:
+        cmd: sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      changed_when: true
+
+    - name: Add Repository to APT sources
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+            $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            sudo apt-get update
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Install Docker Packages
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Add user to docker group
+      ansible.builtin.user:
+        name: media
+        groups: docker
+
+    - name: Create docker directory
+      ansible.builtin.file:
+        path: docker
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+- name: Run Jellyfin setup
+  ansible.builtin.include_tasks:
+    file: jellyfin.yml
+  when: install_jellyfin
+
+- name: Run homarr setup
+  ansible.builtin.include_tasks:
+    file: homarr.yml
+  when: install_homarr
+...

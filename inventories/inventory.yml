@@ -3,4 +3,20 @@ proxmox:
   hosts:
     proxmox-node:
       ansible_host: <ip>
+      ansible_user: <user>
+      ansible_password: <password>
+
+turnkey:
+  hosts:
+    turnkey-fileserver:
+      ansible_host: <ip>
+      ansible_user: <user>
+      ansible_password: <password>
+
+docker:
+  hosts:
+    docker-media:
+      ansible_host: <ip>
+      ansible_user: <user>
+      ansible_password: <password>
 ...

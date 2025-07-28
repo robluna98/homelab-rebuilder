@@ -81,6 +81,20 @@
         - not mountpoint_ownership['stat']['gr_name'] == "users"
         - not mountpoint_ownership['stat']['mode'] == "0755"
 
+    - name: Create media directories
+      ansible.builtin.file:
+        path: /mnt/data/media/{{ item }}
+        state: directory
+        owner: "{{ user }}"
+        group: users
+        mode: '0755'
+        recurse: true
+      loop:
+        - movies/regular
+        - movies/anime
+        - shows/regular
+        - shows/anime
+
 - name: Delete Pre-Defined Samba Shares
   block:
     - name: Delete samba share blocks

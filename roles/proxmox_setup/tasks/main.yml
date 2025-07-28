@@ -16,6 +16,15 @@
         line: deb {{ no_subscription_repo }}
         insertafter: '^deb http://security\.debian\.org bookworm-security main contrib$'
 
+    - name: Patch Proxmox - disable subscription nag
+      ansible.builtin.lineinfile:
+        path: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+        regexp: "^(\\s*)\\.data\\.status\\.toLowerCase\\(\\) !== 'active'\\)"
+        line: "\\1.data.status.toLowerCase() == 'NoMoreNagging') {"
+        backrefs: true
+        state: present
+      when: subscription_nag_remove
+
 - name: Update and Upgrade System
   block:
     - name: Run apt update

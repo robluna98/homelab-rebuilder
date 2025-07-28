@@ -1,2 +1,5 @@
 .vscode
 config/
+
+# Encrypted Key Files
+docker_encrypted_keys.yml

@@ -1,0 +1,220 @@
+---
+- name: Setup Homarr Directory and start Homarr
+  block:
+    - name: Create homarr directory
+      ansible.builtin.file:
+        path: ./docker/homarr
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Add Homarr docker-compose file
+      ansible.builtin.template:
+        src: homarr.j2
+        dest: ./docker/homarr/docker-compose.yml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Check if Homarr is already runnning
+      community.docker.docker_container_info:
+        name: homarr
+      register: homarr_info
+
+    - name: Docker compose up Homarr
+      ansible.builtin.command:
+        cmd: docker compose -f ./docker/homarr/docker-compose.yml up -d
+      changed_when: true
+      when: not homarr_info['exists']
+
+- name: Check if user is already setup in Homarr
+  block:
+    - name: Install sqlite3
+      ansible.builtin.apt:
+        name: sqlite3
+        state: present
+
+    - name: Check user table in database to see if it already exists
+      ansible.builtin.command:
+        cmd: sqlite3 ./docker/homarr/appdata/db/db.sqlite "SELECT name FROM user WHERE name = 'testapi';"
+      register: check_user_table
+      changed_when: false
+
+- name: Onboard user and create API key
+  when: check_user_table['stdout'] | length == 0
+  block:
+    - name: Onboard Homarr
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/trpc/onboard.nextStep?batch=1"
+        method: POST
+        headers:
+          Content-Type: application/json
+        body: |
+          {
+            "0": {
+              "json": {
+                "preferredStep": null
+              },
+              "meta": {
+                "values": {
+                  "preferredStep": [
+                    "undefined"
+                  ]
+                }
+              }
+            }
+          }
+        status_code:
+          - 200
+      register: homarr_onboard
+
+    - name: Create User
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/trpc/user.initUser?batch=1"
+        method: POST
+        headers:
+          Content-Type: application/json
+          Cookie: "{{ homarr_onboard['cookies_string'] }}"
+        body_format: json
+        body: |
+         {
+            "0": {
+              "json": {
+                "username": "TestAPI",
+                "password": "Test123!",
+                "confirmPassword": "Test123!"
+              }
+            }
+         }
+        status_code:
+          - 200
+        follow_redirects: all
+
+    - name: Server Settings
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/trpc/serverSettings.initSettings?batch=1"
+        method: POST
+        headers:
+          Content-Type: application/json
+          Cookie: "{{ homarr_onboard['cookies_string'] }}"
+        body_format: json
+        body: |
+          {
+            "0": {
+              "json": {
+                "analytics": {
+                  "enableGeneral": false,
+                  "enableWidgetData": false,
+                  "enableIntegrationData": false,
+                  "enableUserData": false
+                },
+                "crawlingAndIndexing": {
+                  "noIndex": true,
+                  "noFollow": true,
+                  "noTranslate": true,
+                  "noSiteLinksSearchBox": false
+                },
+                "board": {
+                  "homeBoardId": null,
+                  "mobileHomeBoardId": null,
+                  "enableStatusByDefault": true,
+                  "forceDisableStatus": false
+                },
+                "appearance": {
+                  "defaultColorScheme": "dark"
+                },
+                "culture": {
+                  "defaultLocale": "en"
+                },
+                "search": {
+                  "defaultSearchEngineId": null
+                }
+              }
+            }
+          }
+        status_code:
+          - 200
+      register: homarr_server_settings
+
+    - name: Get CSRF token
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/auth/csrf"
+        method: GET
+        headers:
+          Cookie: "{{ homarr_onboard['cookies_string'] }}"
+      register: csrf_response
+
+    - name: Set CSRF token from API response
+      ansible.builtin.set_fact:
+        csrf_token: "{{ csrf_response['json']['csrfToken'] }}"
+      when: csrf_response['json']['csrfToken'] is defined
+
+    - name: Login with credentials
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/auth/callback/credentials"
+        method: POST
+        headers:
+          Cookie: "{{ homarr_onboard['cookies_string'] }}"
+          Content-Type: application/x-www-form-urlencoded
+          Referer: "http://{{ docker_ip }}:7575/auth/login"
+        body:
+          name: "TestAPI"
+          password: "Test123!"
+          csrfToken: "{{ csrf_token }}"
+          callbackUrl: "http://{{ docker_ip }}:7575/manage/boards"
+        body_format: form-urlencoded
+        follow_redirects: all
+        status_code:
+          - 200
+          - 302
+      register: homarr_login
+
+    - name: Combine cookies for authenticated requests
+      ansible.builtin.set_fact:
+        auth_cookies: "{{ homarr_onboard['cookies_string'] }}; {{ homarr_login['cookies_string'] }}"
+
+    - name: Create API key
+      ansible.builtin.uri:
+        url: "http://{{ docker_ip }}:7575/api/trpc/apiKeys.create?batch=1"
+        method: POST
+        headers:
+          Content-Type: application/json
+          Cookie: "{{ auth_cookies }}"
+        follow_redirects: all
+        status_code:
+          - 200
+      register: homarr_api_key
+
+    - name: Set API key in files directory on localhost
+      ansible.builtin.copy:
+        content: "homarr_api: {{ homarr_api_key['json'][0]['result']['data']['json']['apiKey'] }}"
+        dest: ./roles/docker_vm_config/files/docker_encrypted_keys.yml
+        owner: "{{ lookup('env', 'USER') }}" # The user running the playbook
+        group: "{{ lookup('env', 'USER') }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+
+- name: Create Homarr Apps
+  block:
+    - name: Get API token
+      ansible.builtin.include_vars:
+        file: ./roles/docker_vm_config/files/docker_encrypted_keys.yml
+
+    - name: Create Test App
+      ansible.builtin.uri:
+        url: http://{{ docker_ip }}:7575/api/apps
+        method: POST
+        headers:
+          accept: application/json
+          ApiKey: "{{ homarr_api }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: jellyfin-test
+          description: test-app-created-with-ansible
+          iconUrl: https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/jellyfin.svg
+          href: https://www.example.com
+          pingUrl: https://www.example.com
+...

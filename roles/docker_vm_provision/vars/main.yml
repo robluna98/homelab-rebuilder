@@ -1,0 +1,22 @@
+---
+docker_vm_config:
+  iso_url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  vmid: 200
+  templateid: 900
+  node: proxmox
+  description: Docker Media Server VM created with Ansible Automation
+  api_user: <user>
+  api_password: <password>
+  api_host: <ip>
+  template_name: ubuntu-noble
+  hostname: docker-media
+  user: media
+  password: <password>
+  storage: local
+  lvm_storage: local-lvm
+  network_config: "virtio,bridge=vmbr0"
+  cores: 4
+  sockets: 1
+  memory: 8192
+  disk_volume: 32
+...
